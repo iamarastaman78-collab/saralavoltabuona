@@ -3,11 +3,11 @@ package com.gold.inserter
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
-import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityEvent
 import java.lang.ref.WeakReference
 
 class GoldAccessibilityService : AccessibilityService() {
@@ -31,7 +31,7 @@ class GoldAccessibilityService : AccessibilityService() {
             running = true
             paused = false
 
-            service.avviaSequenza()
+            service.inizia()
         }
 
         fun pause() {
@@ -46,15 +46,16 @@ class GoldAccessibilityService : AccessibilityService() {
             running = true
             paused = false
 
-            service.avviaSequenza()
+            service.inizia()
         }
     }
 
     private val handler =
         Handler(Looper.getMainLooper())
 
-    private var articoloNonTrovatoGestito = false
     private var inserimentoInCorso = false
+    private var ultimoCodiceInserito = -1
+    private var tentativiRosso = 0
 
     override fun onServiceConnected() {
 
@@ -73,6 +74,10 @@ class GoldAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
+    override fun onInterrupt() {
+        paused = true
+    }
+
     override fun onAccessibilityEvent(
         event: AccessibilityEvent?
     ) {
@@ -81,109 +86,143 @@ class GoldAccessibilityService : AccessibilityService() {
             return
         }
 
-        val root =
-            rootInActiveWindow ?: return
-
-        /*
-         * Controlliamo se GOLD ha mostrato
-         * "Articolo non trovato".
-         */
-        if (
-            contieneTesto(
-                root,
-                "Articolo non trovato"
-            )
-        ) {
-
-            if (!articoloNonTrovatoGestito) {
-
-                articoloNonTrovatoGestito = true
-                inserimentoInCorso = false
-
-                premiOK(root)
-
-                handler.postDelayed({
-
-                    if (running && !paused) {
-
-                        passaAlProssimoCodice()
-                    }
-
-                }, 700)
-            }
-
-            return
-        }
-
-        /*
-         * Cerchiamo il campo nel quale GOLD
-         * chiede di inserire il codice.
-         */
-        if (!inserimentoInCorso) {
-
-            val campoCodice =
-                trovaCampoCodice(root)
-
-            if (campoCodice != null) {
-
-                inserimentoInCorso = true
-
-                inserisciCodice(campoCodice)
-            }
-        }
+        controllaSchermata()
     }
 
-    override fun onInterrupt() {
-
-        paused = true
-    }
-
-    private fun avviaSequenza() {
-
-        if (codes.isEmpty()) {
-            return
-        }
+    private fun inizia() {
 
         handler.removeCallbacksAndMessages(null)
 
-        articoloNonTrovatoGestito = false
         inserimentoInCorso = false
+        ultimoCodiceInserito = -1
+        tentativiRosso = 0
 
+        /*
+         * Primo tentativo di aprire il campo
+         * tramite il pulsante rosso.
+         */
         handler.postDelayed({
 
             if (running && !paused) {
-
-                premiPulsanteRosso()
+                cercaCampo()
             }
 
-        }, 500)
+        }, 800)
     }
 
-    private fun trovaCampoCodice(
-        root: AccessibilityNodeInfo
-    ): AccessibilityNodeInfo? {
+    private fun controllaSchermata() {
 
-        /*
-         * Il campo della schermata GOLD è un EditText.
-         */
-        if (
-            root.className?.toString()
-                ?.contains("EditText", ignoreCase = true) == true
-        ) {
+        handler.removeCallbacksAndMessages(null)
 
-            return root
+        handler.postDelayed({
+
+            if (!running || paused) {
+                return@postDelayed
+            }
+
+            cercaCampo()
+
+        }, 250)
+    }
+
+    private fun cercaCampo() {
+
+        if (!running || paused) {
+            return
+        }
+
+        val root =
+            rootInActiveWindow
+
+        if (root == null) {
+
+            riprova()
+            return
         }
 
         /*
-         * Cerchiamo anche tramite il testo
-         * visualizzato nel campo.
+         * Cerchiamo il campo EditText di GOLD.
          */
+        val campo =
+            trovaCampo(root)
+
+        if (campo != null) {
+
+            inserisciNelCampo(campo)
+
+            return
+        }
+
+        /*
+         * Se il campo non è ancora visibile,
+         * proviamo ad aprire la schermata di scansione.
+         */
+        if (tentativiRosso < 3) {
+
+            tentativiRosso++
+
+            premiPulsanteScansione()
+
+            handler.postDelayed({
+
+                if (running && !paused) {
+                    cercaCampo()
+                }
+
+            }, 700)
+
+        } else {
+
+            /*
+             * Ricominciamo a cercare senza
+             * continuare a martellare il pulsante.
+             */
+            tentativiRosso = 0
+
+            handler.postDelayed({
+
+                if (running && !paused) {
+                    cercaCampo()
+                }
+
+            }, 1000)
+        }
+    }
+
+    private fun trovaCampo(
+        node: AccessibilityNodeInfo?
+    ): AccessibilityNodeInfo? {
+
+        if (node == null) {
+            return null
+        }
+
+        val classe =
+            node.className?.toString() ?: ""
+
         val testo =
-            root.text?.toString() ?: ""
+            node.text?.toString() ?: ""
 
         val hint =
-            root.hintText?.toString() ?: ""
+            node.hintText?.toString() ?: ""
 
+        /*
+         * Il campo di GOLD è un EditText.
+         */
+        if (
+            classe.contains(
+                "EditText",
+                ignoreCase = true
+            )
+        ) {
+
+            return node
+        }
+
+        /*
+         * Controllo aggiuntivo tramite
+         * il testo/hint mostrato da GOLD.
+         */
         if (
             testo.contains(
                 "Inserire un codice",
@@ -195,36 +234,47 @@ class GoldAccessibilityService : AccessibilityService() {
             )
         ) {
 
-            return root
+            return node
         }
 
-        for (i in 0 until root.childCount) {
+        for (i in 0 until node.childCount) {
 
             val child =
-                root.getChild(i)
+                node.getChild(i)
 
-            if (child != null) {
+            val trovato =
+                trovaCampo(child)
 
-                val trovato =
-                    trovaCampoCodice(child)
-
-                if (trovato != null) {
-
-                    return trovato
-                }
+            if (trovato != null) {
+                return trovato
             }
         }
 
         return null
     }
 
-    private fun inserisciCodice(
+    private fun inserisciNelCampo(
         campo: AccessibilityNodeInfo
     ) {
+
+        if (!running || paused) {
+            return
+        }
 
         if (currentIndex >= codes.size) {
 
             running = false
+            return
+        }
+
+        /*
+         * Evitiamo di reinserire lo stesso codice
+         * mentre GOLD sta ancora elaborando.
+         */
+        if (
+            inserimentoInCorso &&
+            ultimoCodiceInserito == currentIndex
+        ) {
             return
         }
 
@@ -233,98 +283,123 @@ class GoldAccessibilityService : AccessibilityService() {
 
         if (codice.isEmpty()) {
 
-            passaAlProssimoCodice()
+            passaAlProssimo()
             return
         }
 
-        /*
-         * Inseriamo direttamente il codice nel campo.
-         * Non simuliamo la pressione dei singoli tasti.
-         */
-        val arguments =
-            android.os.Bundle()
+        inserimentoInCorso = true
+        ultimoCodiceInserito = currentIndex
 
-        arguments.putCharSequence(
-            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-            codice
+        /*
+         * Prima attiviamo realmente il campo.
+         * Questo è proprio ciò che finora dovevi
+         * fare manualmente.
+         */
+        campo.performAction(
+            AccessibilityNodeInfo.ACTION_FOCUS
         )
 
-        val inserito =
-            campo.performAction(
-                AccessibilityNodeInfo.ACTION_SET_TEXT,
-                arguments
+        campo.performAction(
+            AccessibilityNodeInfo.ACTION_CLICK
+        )
+
+        /*
+         * Piccola pausa per permettere a GOLD
+         * di attivare il campo.
+         */
+        handler.postDelayed({
+
+            if (!running || paused) {
+                return@postDelayed
+            }
+
+            val args =
+                Bundle()
+
+            args.putCharSequence(
+                AccessibilityNodeInfo
+                    .ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                codice
             )
 
-        if (!inserito) {
+            val risultato =
+                campo.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_TEXT,
+                    args
+                )
 
-            inserimentoInCorso = false
+            if (!risultato) {
+
+                inserimentoInCorso = false
+                ultimoCodiceInserito = -1
+
+                handler.postDelayed({
+
+                    if (running && !paused) {
+                        cercaCampo()
+                    }
+
+                }, 500)
+
+                return@postDelayed
+            }
+
+            /*
+             * Codice inserito.
+             * Ora inviamo ENTER.
+             */
+            handler.postDelayed({
+
+                if (running && !paused) {
+                    premiInvio()
+                }
+
+            }, 350)
+
+        }, 250)
+    }
+
+    private fun premiInvio() {
+
+        val root =
+            rootInActiveWindow
+
+        if (root == null) {
+            passaAlProssimo()
             return
         }
 
+        val campo =
+            trovaCampo(root)
+
+        if (campo != null) {
+
+            /*
+             * Prima proviamo l'azione IME.
+             */
+            campo.performAction(
+                AccessibilityNodeInfo.AccessibilityAction
+                    .ACTION_IME_ENTER.id
+            )
+
+        }
+
         /*
-         * Aspettiamo un attimo e poi premiamo
-         * la freccia blu della tastiera.
+         * GOLD ha bisogno di tempo per elaborare
+         * l'articolo.
          */
         handler.postDelayed({
 
             if (running && !paused) {
 
-                premiInvio(campo)
+                passaAlProssimo()
+
             }
 
-        }, 300)
+        }, 1800)
     }
 
-    private fun premiInvio(
-        campo: AccessibilityNodeInfo
-    ) {
-
-        /*
-         * Sulla schermata GOLD che abbiamo fotografato,
-         * la freccia blu è il pulsante INVIO della tastiera.
-         */
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-
-            campo.performAction(
-                AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
-            )
-
-        } else {
-
-            /*
-             * Su Android più vecchi proviamo comunque
-             * a cliccare il campo per lasciare che GOLD
-             * gestisca l'invio.
-             */
-            campo.performAction(
-                AccessibilityNodeInfo.ACTION_CLICK
-            )
-        }
-
-        /*
-         * Se l'articolo viene trovato, GOLD dovrebbe
-         * procedere senza mostrare il messaggio
-         * "Articolo non trovato".
-         *
-         * Dopo un breve intervallo passiamo comunque
-         * al codice successivo.
-         */
-        handler.postDelayed({
-
-            if (
-                running &&
-                !paused &&
-                !articoloNonTrovatoGestito
-            ) {
-
-                passaAlProssimoCodice()
-            }
-
-        }, 1500)
-    }
-
-    private fun passaAlProssimoCodice() {
+    private fun passaAlProssimo() {
 
         if (!running || paused) {
             return
@@ -332,8 +407,9 @@ class GoldAccessibilityService : AccessibilityService() {
 
         currentIndex++
 
-        articoloNonTrovatoGestito = false
         inserimentoInCorso = false
+        ultimoCodiceInserito = -1
+        tentativiRosso = 0
 
         if (currentIndex >= codes.size) {
 
@@ -342,120 +418,53 @@ class GoldAccessibilityService : AccessibilityService() {
         }
 
         /*
-         * Torniamo alla schermata GOLD e premiamo
-         * nuovamente il pulsante rosso.
+         * NON premiamo subito il rosso.
+         *
+         * Prima cerchiamo se GOLD ha già lasciato
+         * disponibile il campo per il prossimo articolo.
          */
         handler.postDelayed({
 
             if (running && !paused) {
 
-                premiPulsanteRosso()
+                cercaCampo()
+
             }
 
-        }, 500)
+        }, 600)
     }
 
-    private fun premiOK(
-        node: AccessibilityNodeInfo?
-    ): Boolean {
+    private fun premiPulsanteScansione() {
 
-        if (node == null) {
-            return false
-        }
+        val root =
+            rootInActiveWindow
 
-        val testo =
-            node.text?.toString() ?: ""
+        if (root != null) {
 
-        val descrizione =
-            node.contentDescription
-                ?.toString() ?: ""
+            /*
+             * Prima cerchiamo un pulsante che GOLD
+             * abbia identificato come scansione.
+             */
+            val trovato =
+                trovaPulsanteScansione(root)
 
-        if (
-            testo.equals(
-                "OK",
-                ignoreCase = true
-            ) ||
-            descrizione.equals(
-                "OK",
-                ignoreCase = true
-            )
-        ) {
+            if (trovato != null) {
 
-            if (node.isClickable) {
-
-                return node.performAction(
-                    AccessibilityNodeInfo.ACTION_CLICK
-                )
+                if (
+                    trovato.performAction(
+                        AccessibilityNodeInfo.ACTION_CLICK
+                    )
+                ) {
+                    return
+                }
             }
         }
 
-        for (i in 0 until node.childCount) {
-
-            val child =
-                node.getChild(i)
-
-            if (premiOK(child)) {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    private fun contieneTesto(
-        node: AccessibilityNodeInfo?,
-        testoCercato: String
-    ): Boolean {
-
-        if (node == null) {
-            return false
-        }
-
-        val testo =
-            node.text?.toString() ?: ""
-
-        val descrizione =
-            node.contentDescription
-                ?.toString() ?: ""
-
-        if (
-            testo.contains(
-                testoCercato,
-                ignoreCase = true
-            )
-        ) {
-            return true
-        }
-
-        if (
-            descrizione.contains(
-                testoCercato,
-                ignoreCase = true
-            )
-        ) {
-            return true
-        }
-
-        for (i in 0 until node.childCount) {
-
-            val child =
-                node.getChild(i)
-
-            if (
-                contieneTesto(
-                    child,
-                    testoCercato
-                )
-            ) {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    private fun premiPulsanteRosso() {
-
+        /*
+         * Fallback: gesto sul pulsante rosso.
+         *
+         * La posizione precedente era troppo bassa.
+         */
         val metrics =
             resources.displayMetrics
 
@@ -465,15 +474,11 @@ class GoldAccessibilityService : AccessibilityService() {
         val height =
             metrics.heightPixels.toFloat()
 
-        /*
-         * Posizione del pulsante rosso
-         * nella schermata GOLD.
-         */
         val x =
-            width * 0.875f
+            width * 0.82f
 
         val y =
-            height * 0.865f
+            height * 0.57f
 
         val path =
             Path()
@@ -486,7 +491,7 @@ class GoldAccessibilityService : AccessibilityService() {
                     GestureDescription.StrokeDescription(
                         path,
                         0,
-                        100
+                        120
                     )
                 )
                 .build()
@@ -496,5 +501,70 @@ class GoldAccessibilityService : AccessibilityService() {
             null,
             null
         )
+    }
+
+    private fun trovaPulsanteScansione(
+        node: AccessibilityNodeInfo?
+    ): AccessibilityNodeInfo? {
+
+        if (node == null) {
+            return null
+        }
+
+        val testo =
+            node.text?.toString() ?: ""
+
+        val descrizione =
+            node.contentDescription
+                ?.toString() ?: ""
+
+        val combinato =
+            "$testo $descrizione"
+
+        if (
+            combinato.contains(
+                "scansion",
+                ignoreCase = true
+            ) ||
+            combinato.contains(
+                "scanner",
+                ignoreCase = true
+            ) ||
+            combinato.contains(
+                "scan",
+                ignoreCase = true
+            )
+        ) {
+
+            if (node.isClickable) {
+                return node
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+
+            val child =
+                node.getChild(i)
+
+            val trovato =
+                trovaPulsanteScansione(child)
+
+            if (trovato != null) {
+                return trovato
+            }
+        }
+
+        return null
+    }
+
+    private fun riprova() {
+
+        handler.postDelayed({
+
+            if (running && !paused) {
+                cercaCampo()
+            }
+
+        }, 500)
     }
 }
