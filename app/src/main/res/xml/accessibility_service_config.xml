@@ -4,4 +4,4 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:notificationTimeout="50"
     android:canRetrieveWindowContent="true"
-    android:description="Servizio Gold per automatizzare gli articoli" />
+    android:description="@string/accessibility_description" />
