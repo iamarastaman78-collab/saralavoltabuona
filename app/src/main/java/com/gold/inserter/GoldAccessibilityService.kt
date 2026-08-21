@@ -78,16 +78,29 @@ class GoldAccessibilityService : AccessibilityService() {
         paused = true
     }
 
-    override fun onAccessibilityEvent(
-        event: AccessibilityEvent?
-    ) {
+   override fun onAccessibilityEvent(
+    event: AccessibilityEvent?
+) {
 
-        if (!running || paused) {
-            return
-        }
-
-        controllaSchermata()
+    if (!running || paused) {
+        return
     }
+
+    /*
+     * NON fare nulla quando siamo dentro
+     * la nostra app "Sarà la volta buona".
+     *
+     * Altrimenti il servizio potrebbe premere
+     * accidentalmente i nostri stessi pulsanti.
+     */
+    if (
+        event?.packageName?.toString() == packageName
+    ) {
+        return
+    }
+
+    controllaSchermata()
+} 
 
     private fun inizia() {
 
@@ -125,14 +138,25 @@ class GoldAccessibilityService : AccessibilityService() {
         }, 250)
     }
 
-    private fun cercaCampo() {
+   private fun cercaCampo() {
 
-        if (!running || paused) {
-            return
-        }
+    if (!running || paused) {
+        return
+    }
 
-        val root =
-            rootInActiveWindow
+    val root =
+        rootInActiveWindow
+            ?: return
+
+    /*
+     * Se la schermata attiva è la nostra app,
+     * NON eseguiamo nessun gesto.
+     */
+    if (
+        root.packageName?.toString() == packageName
+    ) {
+        return
+    } 
 
         if (root == null) {
 
