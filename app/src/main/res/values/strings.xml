@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <string name="accessibility_description">Servizio per automatizzare l'inserimento degli articoli in GOLD</string>
+    <string name="app_name">Sarà la volta buona</string>
+
+    <string name="accessibility_description">Servizio per automatizzare l'inserimento degli articoli</string>
 
 </resources>
